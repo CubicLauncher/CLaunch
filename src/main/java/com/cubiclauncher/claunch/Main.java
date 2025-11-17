@@ -1,6 +1,5 @@
 package com.cubiclauncher.claunch;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
