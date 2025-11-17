@@ -21,7 +21,7 @@ tasks.test {
     useJUnitPlatform()
 }
 
-tasks.register<Jar>("build:jar") {
+tasks.jar {
     archiveBaseName.set("CLaunch")
     from(sourceSets.main.get().output)
 }
