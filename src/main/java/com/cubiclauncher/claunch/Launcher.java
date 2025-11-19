@@ -179,7 +179,7 @@ public class Launcher {
      */
     private static class DependencyResolver {
         private final Map<String, Library> libraries = new LinkedHashMap<>();
-        private final Map<String, String> paths = new LinkedHashMap<>();
+        private final Map<String, List<String>> paths = new LinkedHashMap<>();
         private final Path libDir;
         private final Path nativesDir;
 
@@ -211,7 +211,7 @@ public class Launcher {
         private void resolveLibraryPath(Library lib, String key) {
             Path path = lib.resolvePath(libDir);
             if (path != null && Files.exists(path)) {
-                paths.put(key, path.toString());
+                paths.computeIfAbsent(key, k -> new ArrayList<>()).add(path.toString());
                 System.out.println("Library: " + key + " -> " + path);
             } else {
                 System.err.println("Library not found: " + key);
@@ -219,7 +219,9 @@ public class Launcher {
         }
 
         public String buildClasspath(VersionInfo info) {
-            List<String> classpath = new ArrayList<>(paths.values());
+            List<String> classpath = paths.values().stream()
+                    .flatMap(List::stream)
+                    .collect(Collectors.toList());
             addVersionJars(classpath, info);
             return String.join(File.pathSeparator, classpath);
         }
