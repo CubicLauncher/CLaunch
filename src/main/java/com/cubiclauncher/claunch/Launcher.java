@@ -10,13 +10,15 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Universal Minecraft Launcher
  * Soporta Vanilla, Forge, NeoForge y Fabric con sistema de herencia de versiones
  */
 public class Launcher {
-
+    private static final Logger log = LoggerFactory.getLogger(Launcher.class);
     /**
      * Lanzamiento simple sin opciones adicionales (Quick Play y Demo deshabilitados)
      */
@@ -36,13 +38,13 @@ public class Launcher {
                               int width, int height, boolean cracked, LaunchOptions options)
             throws IOException, InterruptedException {
 
-        System.out.println("=== CubicLauncher - Universal Minecraft Launcher ===");
+        log.info("=== CubicLauncher CLaunch ===");
 
         VersionInfo info = new VersionInfo(versionJsonPath, gameDir);
-        System.out.println("Version: " + info.getVersionId());
-        System.out.println("Demo mode: " + options.demoMode);
-        System.out.println("Quick Play: " + (options.quickPlayMode != null ?
-                options.quickPlayMode + " -> " + options.quickPlayValue : "disabled"));
+        log.info("Version: {}", info.getVersionId());
+        log.info("Demo mode: {}", options.demoMode);
+        log.info("Quick Play: {}", options.quickPlayMode != null ?
+                options.quickPlayMode + " -> " + options.quickPlayValue : "disabled");
 
         prepareDirectories(info);
 
@@ -96,7 +98,7 @@ public class Launcher {
     }
 
     private static String buildClasspath(VersionInfo info) {
-        System.out.println("Building classpath...");
+        log.info("Building classpath...");
 
         DependencyResolver resolver = new DependencyResolver(info.getLibDir(), info.getNativesDir());
 
@@ -109,16 +111,16 @@ public class Launcher {
         resolver.processVersion(info.getVersionData(), true);
 
         String classpath = resolver.buildClasspath(info);
-        System.out.println("Classpath built with " + resolver.getLibraryCount() + " libraries");
+        log.info("Classpath built with {} libraries", resolver.getLibraryCount());
 
         return classpath;
     }
 
     private static void executeGame(List<String> command, String gameDir, String javaPath)
             throws IOException, InterruptedException {
-        System.out.println("\n=== Final Command ===");
-        System.out.println(String.join(" ", command));
-        System.out.println("\n=== Starting Game ===");
+        log.info("\n=== Final Command ===");
+        log.info(String.join(" ", command));
+        log.info("\n=== Starting Game ===");
 
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(new File(gameDir));
@@ -131,9 +133,9 @@ public class Launcher {
         int exitCode = process.waitFor();
 
         if (exitCode == 0) {
-            System.out.println("Game finished successfully");
+            log.info("Game finished successfully");
         } else {
-            System.err.println("ERROR: Exit code: " + exitCode);
+            log.error("ERROR: Exit code: {}", exitCode);
         }
     }
 }

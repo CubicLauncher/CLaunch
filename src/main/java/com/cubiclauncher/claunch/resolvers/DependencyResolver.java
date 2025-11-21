@@ -6,6 +6,8 @@ import com.cubiclauncher.claunch.utils.JsonUtils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.io.File;
@@ -21,7 +23,7 @@ public class DependencyResolver {
     private final Map<String, String> libraryKeys = new HashMap<>(); // group:artifact -> path
     private final Map<String, String> nativeLibraries = new HashMap<>(); // Para natives separados
     private final Path libDir;
-
+    private static final Logger log = LoggerFactory.getLogger(CommandBuilder.class);
     public DependencyResolver(Path libDir, Path nativesDir) {
         this.libDir = libDir;
     }
@@ -126,9 +128,9 @@ public class DependencyResolver {
                 // Conflicto detectado: misma librería, diferentes versiones
                 if (isChild) {
                     // El child tiene prioridad: reemplazar la del parent
-                    System.out.println("Library conflict resolved - Child priority: " + libraryKey);
-                    System.out.println("  Replacing: " + existingPath);
-                    System.out.println("  With: " + pathStr);
+                    log.info("Library conflict resolved - Child priority: {}", libraryKey);
+                    log.info("  Replacing: {}", existingPath);
+                    log.info("  With: {}", pathStr);
 
                     addedPaths.remove(existingPath);
                     addedPaths.add(pathStr);
@@ -136,24 +138,28 @@ public class DependencyResolver {
                 } else {
                     // El parent se procesa primero, mantener la existente si el child no la reemplazó
                     if (!addedPaths.contains(pathStr)) {
-                        System.out.println("Library conflict - Keeping parent version: " + libraryKey);
+                        log.info("Library conflict - Keeping parent version: {}", libraryKey);
                     }
                 }
             } else {
                 // Primera vez que vemos esta librería
                 libraryKeys.put(libraryKey, pathStr);
                 if (addedPaths.add(pathStr)) {
-                    System.out.println("Library: " + description + " -> " + pathStr);
+                    logAndAdd(pathStr, description, "library");
                 }
             }
         } else {
             // Librería sin clave o nativa, agregar por path
             if (addedPaths.add(pathStr)) {
-                System.out.println("Library: " + description + " -> " + pathStr);
+                logAndAdd(pathStr, description, "library");
             }
         }
     }
-
+    private void logAndAdd(String pathStr, String description, String type) {
+        if (addedPaths.add(pathStr)) {
+            log.info("{}: {} -> {}", type, description, pathStr);
+        }
+    }
     private void addNativePath(Path path, String description) {
         if (path == null || !Files.exists(path)) {
             if (path != null) {
@@ -165,7 +171,7 @@ public class DependencyResolver {
         String pathStr = path.toString();
         // Los natives se agregan directamente sin verificar conflictos
         if (addedPaths.add(pathStr)) {
-            System.out.println("Native: " + description + " -> " + pathStr);
+            logAndAdd(pathStr, description,"native");
         }
     }
 
@@ -180,7 +186,7 @@ public class DependencyResolver {
         Path clientJar = info.getClientJar();
         Path versionJar = info.getVersionJar();
 
-        System.out.println("Loader: " + loaderType);
+        log.info("Loader: {}", loaderType);
 
         switch (loaderType) {
             case "forge":

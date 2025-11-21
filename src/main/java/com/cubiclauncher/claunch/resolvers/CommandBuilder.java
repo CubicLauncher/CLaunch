@@ -6,6 +6,8 @@ import com.cubiclauncher.claunch.utils.JsonUtils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -20,7 +22,7 @@ public class CommandBuilder {
     private final VersionInfo info;
     private final Map<String, String> vars;
     private final LaunchOptions options;
-
+    private static final Logger log = LoggerFactory.getLogger(CommandBuilder.class);
     // Argumentos que se deben ignorar si no están habilitados
     private static final Set<String> DEMO_ARGS = Set.of("--demo");
     private static final Set<String> QUICKPLAY_ARGS = Set.of(
@@ -45,7 +47,7 @@ public class CommandBuilder {
         command.add("-Dminecraft.launcher.version=1.0");
 
         if (cracked) {
-            System.out.println("Offline mode enabled");
+            log.info("Offline mode enabled");
             command.add("-Dminecraft.api.env=custom");
             command.add("-Dminecraft.api.auth.host=https://invalid.invalid");
             command.add("-Dminecraft.api.account.host=https://invalid.invalid");
@@ -418,7 +420,7 @@ public class CommandBuilder {
         toRemove.sort(Collections.reverseOrder());
         for (int idx : toRemove) {
             if (idx < command.size()) {
-                System.out.println("Removing unresolved arg: " + command.get(idx));
+                log.info("Removing unresolved arg: {}", command.get(idx));
                 command.remove(idx);
             }
         }
