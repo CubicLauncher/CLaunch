@@ -4,7 +4,6 @@ import com.google.gson.*;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
-import java.util.stream.*;
 
 /**
  * Universal Minecraft Launcher
@@ -13,6 +12,42 @@ import java.util.stream.*;
 public class Launcher {
 
     // ==================== CLASES INTERNAS ====================
+
+    /**
+     * Opciones de lanzamiento opcionales
+     */
+    public static class LaunchOptions {
+        public boolean demoMode = false;
+        public String quickPlayMode = null; // "singleplayer", "multiplayer", "realms"
+        public String quickPlayValue = null; // world name, server address, or realm id
+
+        public static LaunchOptions defaults() {
+            return new LaunchOptions();
+        }
+
+        public LaunchOptions withDemo(boolean demo) {
+            this.demoMode = demo;
+            return this;
+        }
+
+        public LaunchOptions withQuickPlaySingleplayer(String worldName) {
+            this.quickPlayMode = "singleplayer";
+            this.quickPlayValue = worldName;
+            return this;
+        }
+
+        public LaunchOptions withQuickPlayMultiplayer(String serverAddress) {
+            this.quickPlayMode = "multiplayer";
+            this.quickPlayValue = serverAddress;
+            return this;
+        }
+
+        public LaunchOptions withQuickPlayRealms(String realmId) {
+            this.quickPlayMode = "realms";
+            this.quickPlayValue = realmId;
+            return this;
+        }
+    }
 
     /**
      * Encapsula información completa de versión con soporte de herencia
@@ -40,7 +75,6 @@ public class Launcher {
             this.versionId = versionData.get("id").getAsString();
             this.versionDir = Paths.get(versionJsonPath).getParent();
 
-            // Cargar versión base si existe herencia
             if (versionData.has("inheritsFrom")) {
                 this.baseVersionId = versionData.get("inheritsFrom").getAsString();
                 String baseJsonPath = this.gameDir.resolve("shared/versions")
@@ -59,7 +93,6 @@ public class Launcher {
                 this.resolvedVersionId = versionId;
             }
 
-            // Inicializar rutas compartidas
             Path sharedDir = this.gameDir.resolve("shared");
             this.libDir = sharedDir.resolve("libraries").toAbsolutePath();
             this.assetsDir = sharedDir.resolve("assets").toAbsolutePath();
@@ -94,7 +127,6 @@ public class Launcher {
             return assetsDir.resolve("virtual").resolve(getAssetsIndexName());
         }
 
-        // Getters
         public String getVersionId() { return versionId; }
         public String getBaseVersionId() { return baseVersionId; }
         public String getResolvedVersionId() { return resolvedVersionId; }
@@ -115,13 +147,12 @@ public class Launcher {
         private final String name;
         private final JsonObject downloads;
         private final JsonArray rules;
-        private final JsonObject natives;
 
         public Library(JsonObject libObject) {
             this.name = safeGetString(libObject, "name");
             this.downloads = safeGetObject(libObject, "downloads");
-            this.rules = safeGetArray(libObject, "rules");
-            this.natives = safeGetObject(libObject, "natives");
+            this.rules = safeGetArray(libObject);
+            JsonObject natives = safeGetObject(libObject, "natives");
         }
 
         public boolean shouldInclude() {
@@ -140,7 +171,6 @@ public class Launcher {
             String path = getArtifactPath();
             if (path != null) return libDir.resolve(path);
 
-            // Construir path desde name
             if (name != null) {
                 String[] parts = name.split(":");
                 if (parts.length >= 3) {
@@ -176,16 +206,15 @@ public class Launcher {
 
     /**
      * Resuelve dependencias con soporte de herencia y conflictos
+     * Prioriza librerías del child sobre el parent
      */
     private static class DependencyResolver {
-        private final Map<String, Library> libraries = new LinkedHashMap<>();
-        private final Map<String, List<String>> paths = new LinkedHashMap<>();
+        private final Set<String> addedPaths = new LinkedHashSet<>();
+        private final Map<String, String> libraryKeys = new HashMap<>(); // group:artifact -> path
         private final Path libDir;
-        private final Path nativesDir;
 
         public DependencyResolver(Path libDir, Path nativesDir) {
             this.libDir = libDir;
-            this.nativesDir = nativesDir;
         }
 
         public void processVersion(JsonObject versionData, boolean isChild) {
@@ -193,35 +222,124 @@ public class Launcher {
 
             JsonArray libsArray = versionData.getAsJsonArray("libraries");
             for (JsonElement element : libsArray) {
-                Library lib = new Library(element.getAsJsonObject());
+                JsonObject libObj = element.getAsJsonObject();
+                Library lib = new Library(libObj);
 
                 if (!lib.shouldInclude()) continue;
 
-                String key = lib.getKey();
-                if (key == null) continue;
+                // Procesar artifact principal
+                addArtifact(libObj, lib, isChild);
 
-                // Child version siempre sobrescribe parent
-                if (isChild || !libraries.containsKey(key)) {
-                    libraries.put(key, lib);
-                    resolveLibraryPath(lib, key);
+                // Procesar natives
+                addNatives(libObj, lib, isChild);
+            }
+        }
+
+        private void addArtifact(JsonObject libObj, Library lib, boolean isChild) {
+            JsonObject downloads = safeGetObject(libObj, "downloads");
+            if (downloads != null && downloads.has("artifact")) {
+                JsonObject artifact = downloads.getAsJsonObject("artifact");
+                String path = safeGetString(artifact, "path");
+                if (path != null) {
+                    Path fullPath = libDir.resolve(path);
+                    addPath(fullPath, lib.name + " (artifact)", lib.getKey(), isChild);
+                }
+            } else {
+                // Construir path desde name si no hay downloads
+                Path path = lib.resolvePath(libDir);
+                if (path != null) {
+                    addPath(path, lib.name, lib.getKey(), isChild);
                 }
             }
         }
 
-        private void resolveLibraryPath(Library lib, String key) {
-            Path path = lib.resolvePath(libDir);
-            if (path != null && Files.exists(path)) {
-                paths.computeIfAbsent(key, k -> new ArrayList<>()).add(path.toString());
-                System.out.println("Library: " + key + " -> " + path);
+        private void addNatives(JsonObject libObj, Library lib, boolean isChild) {
+            JsonObject downloads = safeGetObject(libObj, "downloads");
+            JsonObject natives = safeGetObject(libObj, "natives");
+
+            if (downloads == null || natives == null) return;
+
+            // Determinar el classifier de natives para el OS actual
+            String osName = System.getProperty("os.name").toLowerCase();
+            String nativeKey = null;
+
+            if (osName.contains("win")) {
+                nativeKey = safeGetString(natives, "windows");
+            } else if (osName.contains("mac") || osName.contains("darwin")) {
+                nativeKey = safeGetString(natives, "osx");
+            } else if (osName.contains("linux")) {
+                nativeKey = safeGetString(natives, "linux");
+            }
+
+            if (nativeKey == null) return;
+
+            // Reemplazar ${arch} si existe
+            String arch = System.getProperty("os.arch").contains("64") ? "64" : "32";
+            nativeKey = nativeKey.replace("${arch}", arch);
+
+            // Buscar en classifiers
+            if (downloads.has("classifiers")) {
+                JsonObject classifiers = downloads.getAsJsonObject("classifiers");
+                if (classifiers.has(nativeKey)) {
+                    JsonObject nativeArtifact = classifiers.getAsJsonObject(nativeKey);
+                    String path = safeGetString(nativeArtifact, "path");
+                    if (path != null) {
+                        Path fullPath = libDir.resolve(path);
+                        // Los natives no tienen clave única, se manejan por path
+                        addPath(fullPath, lib.name + " (native: " + nativeKey + ")", null, isChild);
+                    }
+                }
+            }
+        }
+
+        private void addPath(Path path, String description, String libraryKey, boolean isChild) {
+            if (path == null || !Files.exists(path)) {
+                if (path != null) {
+                    System.err.println("Library not found: " + description + " -> " + path);
+                }
+                return;
+            }
+
+            String pathStr = path.toString();
+
+            // Si tiene clave (group:artifact), verificar conflictos
+            if (libraryKey != null) {
+                String existingPath = libraryKeys.get(libraryKey);
+
+                if (existingPath != null) {
+                    // Conflicto detectado: misma librería, diferentes versiones
+                    if (isChild) {
+                        // El child tiene prioridad: reemplazar la del parent
+                        System.out.println("Library conflict resolved - Child priority: " + libraryKey);
+                        System.out.println("  Replacing: " + existingPath);
+                        System.out.println("  With: " + pathStr);
+
+                        addedPaths.remove(existingPath);
+                        addedPaths.add(pathStr);
+                        libraryKeys.put(libraryKey, pathStr);
+                    } else {
+                        // El parent se procesa primero, mantener la existente si el child no la reemplazó
+                        if (!addedPaths.contains(pathStr)) {
+                            System.out.println("Library conflict - Keeping parent version: " + libraryKey);
+                        }
+                    }
+                } else {
+                    // Primera vez que vemos esta librería
+                    libraryKeys.put(libraryKey, pathStr);
+                    if (addedPaths.add(pathStr)) {
+                        System.out.println("Library: " + description + " -> " + pathStr);
+                    }
+                }
             } else {
-                System.err.println("Library not found: " + key);
+                // Librería sin clave (natives), agregar por path
+                if (addedPaths.add(pathStr)) {
+                    System.out.println("Library: " + description + " -> " + pathStr);
+                }
             }
         }
 
         public String buildClasspath(VersionInfo info) {
-            List<String> classpath = paths.values().stream()
-                    .flatMap(List::stream)
-                    .collect(Collectors.toList());
+            List<String> classpath = new ArrayList<>(addedPaths);
             addVersionJars(classpath, info);
             return String.join(File.pathSeparator, classpath);
         }
@@ -232,8 +350,6 @@ public class Launcher {
             Path versionJar = info.getVersionJar();
 
             System.out.println("Loader: " + loaderType);
-            System.out.println("Client JAR: " + clientJar + " (exists: " + Files.exists(clientJar) + ")");
-            System.out.println("Version JAR: " + versionJar + " (exists: " + Files.exists(versionJar) + ")");
 
             switch (loaderType) {
                 case "forge":
@@ -255,22 +371,18 @@ public class Launcher {
                 String jarPath = jar.toString();
                 if (!classpath.contains(jarPath)) {
                     classpath.add(jarPath);
-                    System.out.println("Added JAR: " + jar);
                 }
             }
         }
 
         private void addForgeUniversalJar(List<String> classpath, VersionInfo info) {
             Path forgeJar = findForgeUniversalJar(info);
-            if (forgeJar != null) {
-                addIfExists(classpath, forgeJar);
-            }
+            if (forgeJar != null) addIfExists(classpath, forgeJar);
         }
 
         private Path findForgeUniversalJar(VersionInfo info) {
             Path jar = searchForgeInLibraries(info.getVersionData());
             if (jar != null) return jar;
-
             if (info.hasInheritance()) {
                 jar = searchForgeInLibraries(info.getBaseVersionData());
             }
@@ -300,24 +412,18 @@ public class Launcher {
             String artifact = parts[1];
             String version = parts[2];
 
-            // Probar con classifier "universal"
             Path universal = libDir.resolve(groupPath)
-                    .resolve(artifact)
-                    .resolve(version)
+                    .resolve(artifact).resolve(version)
                     .resolve(artifact + "-" + version + "-universal.jar");
 
             if (Files.exists(universal)) return universal;
 
-            // Probar sin classifier
             return libDir.resolve(groupPath)
-                    .resolve(artifact)
-                    .resolve(version)
+                    .resolve(artifact).resolve(version)
                     .resolve(artifact + "-" + version + ".jar");
         }
 
-        public int getLibraryCount() {
-            return libraries.size();
-        }
+        public int getLibraryCount() { return addedPaths.size(); }
     }
 
     /**
@@ -327,10 +433,19 @@ public class Launcher {
         private final List<String> command = new ArrayList<>();
         private final VersionInfo info;
         private final Map<String, String> vars;
+        private final LaunchOptions options;
 
-        public CommandBuilder(VersionInfo info, Map<String, String> vars) {
+        // Argumentos que se deben ignorar si no están habilitados
+        private static final Set<String> DEMO_ARGS = Set.of("--demo");
+        private static final Set<String> QUICKPLAY_ARGS = Set.of(
+                "--quickPlaySingleplayer", "--quickPlayMultiplayer",
+                "--quickPlayRealms", "--quickPlayPath"
+        );
+
+        public CommandBuilder(VersionInfo info, Map<String, String> vars, LaunchOptions options) {
             this.info = info;
             this.vars = vars;
+            this.options = options != null ? options : LaunchOptions.defaults();
         }
 
         public CommandBuilder addJava(String javaPath) {
@@ -339,12 +454,10 @@ public class Launcher {
         }
 
         public CommandBuilder addJvmArgs(String minRam, String maxRam, boolean cracked) {
-            // System properties
             command.add("-Djava.library.path=" + info.getNativesDir());
             command.add("-Dminecraft.launcher.brand=CubicLauncher");
             command.add("-Dminecraft.launcher.version=1.0");
 
-            // Modo offline
             if (cracked) {
                 System.out.println("Offline mode enabled");
                 command.add("-Dminecraft.api.env=custom");
@@ -354,11 +467,9 @@ public class Launcher {
                 command.add("-Dminecraft.api.services.host=https://invalid.invalid");
             }
 
-            // Memoria
             command.add("-Xms" + minRam);
             command.add("-Xmx" + maxRam);
 
-            // Argumentos JVM del JSON
             processJvmArguments();
             return this;
         }
@@ -377,24 +488,18 @@ public class Launcher {
         public CommandBuilder addGameArgs(int width, int height) {
             processGameArguments();
             addDefaultGameArgs(width, height);
+            addOptionalArgs();
+            cleanupUnresolvedVars();
             return this;
         }
 
         private void processJvmArguments() {
-            // Procesar child primero
             JsonArray childArgs = getArgsFromVersion(info.getVersionData(), "jvm");
-            if (childArgs != null) {
-                System.out.println("Processing child JVM args");
-                processJvmArray(childArgs);
-            }
+            if (childArgs != null) processJvmArray(childArgs);
 
-            // Luego parent
             if (info.hasInheritance()) {
                 JsonArray parentArgs = getArgsFromVersion(info.getBaseVersionData(), "jvm");
-                if (parentArgs != null) {
-                    System.out.println("Processing parent JVM args");
-                    processJvmArray(parentArgs);
-                }
+                if (parentArgs != null) processJvmArray(parentArgs);
             }
         }
 
@@ -409,14 +514,12 @@ public class Launcher {
         }
 
         private void addJvmArg(String arg) {
-            // Ignorar classpath (se maneja por separado)
             if (arg.equals("-cp") || arg.equals("-classpath") || arg.contains("${classpath}")) {
                 return;
             }
 
             String replaced = replaceVars(arg);
 
-            // Flags pueden repetirse con valores diferentes
             if (replaced.startsWith("--") || replaced.startsWith("-D") || replaced.startsWith("-X")) {
                 command.add(replaced);
             } else if (!command.contains(replaced)) {
@@ -440,11 +543,10 @@ public class Launcher {
         }
 
         private void processValueArray(JsonArray values) {
-            if (values.size() == 0) return;
+            if (values.isEmpty()) return;
 
             String first = values.get(0).getAsString();
 
-            // Flags con múltiples valores (--add-opens, etc)
             if (first.startsWith("--") && values.size() > 2) {
                 String flag = replaceVars(first);
                 for (int i = 1; i < values.size(); i++) {
@@ -455,7 +557,6 @@ public class Launcher {
                     }
                 }
             } else {
-                // Valores normales
                 List<String> toAdd = new ArrayList<>();
                 boolean skip = false;
 
@@ -468,7 +569,7 @@ public class Launcher {
                     toAdd.add(replaceVars(arg));
                 }
 
-                if (!skip && !toAdd.isEmpty() && !command.contains(toAdd.get(0))) {
+                if (!skip && !toAdd.isEmpty() && !command.contains(toAdd.getFirst())) {
                     command.addAll(toAdd);
                 }
             }
@@ -484,7 +585,6 @@ public class Launcher {
         }
 
         private void processGameArguments() {
-            // Formato moderno (arguments.game)
             JsonArray childArgs = getArgsFromVersion(info.getVersionData(), "game");
             if (childArgs != null) {
                 addGameArgsArray(childArgs);
@@ -493,22 +593,64 @@ public class Launcher {
                 if (parentArgs != null) {
                     addGameArgsArray(parentArgs);
                 }
-            }
-            // Formato legacy (minecraftArguments)
-            else {
+            } else {
                 addLegacyArgs();
             }
         }
 
         private void addGameArgsArray(JsonArray args) {
-            for (JsonElement element : args) {
+            for (int i = 0; i < args.size(); i++) {
+                JsonElement element = args.get(i);
+
                 if (element.isJsonPrimitive()) {
-                    command.add(replaceVars(element.getAsString()));
-                } else if (element.isJsonObject()) {
-                    JsonObject argObj = element.getAsJsonObject();
-                    if (argObj.has("rules") && !evaluateRules(argObj.getAsJsonArray("rules"))) {
+                    String arg = element.getAsString();
+
+                    // Filtrar argumentos de demo si no está habilitado
+                    if (DEMO_ARGS.contains(arg) && !options.demoMode) {
                         continue;
                     }
+
+                    // Filtrar argumentos de quickplay si no está habilitado
+                    if (QUICKPLAY_ARGS.contains(arg) && options.quickPlayMode == null) {
+                        // Saltar también el siguiente argumento (el valor)
+                        if (i + 1 < args.size() && args.get(i + 1).isJsonPrimitive()) {
+                            i++;
+                        }
+                        continue;
+                    }
+
+                    command.add(replaceVars(arg));
+                } else if (element.isJsonObject()) {
+                    JsonObject argObj = element.getAsJsonObject();
+
+                    // Verificar si es un argumento condicional de demo/quickplay
+                    if (argObj.has("rules")) {
+                        JsonArray rules = argObj.getAsJsonArray("rules");
+                        if (isFeatureRule(rules, "is_demo_user") && !options.demoMode) {
+                            continue;
+                        }
+                        if (isFeatureRule(rules, "is_quick_play_singleplayer") &&
+                                !"singleplayer".equals(options.quickPlayMode)) {
+                            continue;
+                        }
+                        if (isFeatureRule(rules, "is_quick_play_multiplayer") &&
+                                !"multiplayer".equals(options.quickPlayMode)) {
+                            continue;
+                        }
+                        if (isFeatureRule(rules, "is_quick_play_realms") &&
+                                !"realms".equals(options.quickPlayMode)) {
+                            continue;
+                        }
+                        if (isFeatureRule(rules, "has_quick_plays_support") &&
+                                options.quickPlayMode == null) {
+                            continue;
+                        }
+
+                        if (!evaluateRulesWithOptions(rules)) {
+                            continue;
+                        }
+                    }
+
                     if (argObj.has("value")) {
                         addGameValue(argObj.get("value"));
                     }
@@ -516,14 +658,103 @@ public class Launcher {
             }
         }
 
-        private void addGameValue(JsonElement value) {
-            if (value.isJsonPrimitive()) {
-                command.add(replaceVars(value.getAsString()));
-            } else if (value.isJsonArray()) {
-                for (JsonElement elem : value.getAsJsonArray()) {
-                    command.add(replaceVars(elem.getAsString()));
+        private boolean isFeatureRule(JsonArray rules, String featureName) {
+            for (JsonElement ruleElem : rules) {
+                JsonObject rule = ruleElem.getAsJsonObject();
+                if (rule.has("features")) {
+                    JsonObject features = rule.getAsJsonObject("features");
+                    if (features.has(featureName)) {
+                        return true;
+                    }
                 }
             }
+            return false;
+        }
+
+        private boolean evaluateRulesWithOptions(JsonArray rules) {
+            boolean allow = false;
+
+            for (JsonElement element : rules) {
+                JsonObject rule = element.getAsJsonObject();
+                String action = rule.get("action").getAsString();
+
+                // Evaluar features
+                if (rule.has("features")) {
+                    JsonObject features = rule.getAsJsonObject("features");
+                    boolean featureMatch = true;
+
+                    if (features.has("is_demo_user")) {
+                        featureMatch = features.get("is_demo_user").getAsBoolean() == options.demoMode;
+                    }
+                    if (features.has("has_custom_resolution")) {
+                        featureMatch = true; // Siempre soportamos resolución custom
+                    }
+                    if (features.has("is_quick_play_singleplayer")) {
+                        featureMatch = "singleplayer".equals(options.quickPlayMode);
+                    }
+                    if (features.has("is_quick_play_multiplayer")) {
+                        featureMatch = "multiplayer".equals(options.quickPlayMode);
+                    }
+                    if (features.has("is_quick_play_realms")) {
+                        featureMatch = "realms".equals(options.quickPlayMode);
+                    }
+                    if (features.has("has_quick_plays_support")) {
+                        featureMatch = options.quickPlayMode != null;
+                    }
+
+                    if (featureMatch) {
+                        allow = action.equals("allow");
+                    }
+                } else if (rule.has("os")) {
+                    // Evaluar OS rules normalmente
+                    if (evaluateOsRule(rule.getAsJsonObject("os"))) {
+                        allow = action.equals("allow");
+                    }
+                } else {
+                    allow = action.equals("allow");
+                }
+            }
+            return allow;
+        }
+
+        private boolean evaluateOsRule(JsonObject os) {
+            String currentOs = System.getProperty("os.name").toLowerCase();
+            String currentArch = System.getProperty("os.arch").toLowerCase();
+
+            String name = safeGetString(os, "name");
+            String arch = safeGetString(os, "arch");
+
+            boolean osMatch = name == null ||
+                    (name.equals("windows") && currentOs.contains("win")) ||
+                    (name.equals("linux") && currentOs.contains("linux")) ||
+                    (name.equals("osx") && (currentOs.contains("mac") || currentOs.contains("darwin")));
+
+            boolean archMatch = arch == null || arch.isEmpty() ||
+                    (arch.equals("x86") && currentArch.contains("86")) ||
+                    (arch.equals("x64") && currentArch.contains("64"));
+
+            return osMatch && archMatch;
+        }
+
+        private void addGameValue(JsonElement value) {
+            if (value.isJsonPrimitive()) {
+                String arg = value.getAsString();
+                if (shouldFilterArg(arg)) {
+                    command.add(replaceVars(arg));
+                }
+            } else if (value.isJsonArray()) {
+                for (JsonElement elem : value.getAsJsonArray()) {
+                    String arg = elem.getAsString();
+                    if (shouldFilterArg(arg)) {
+                        command.add(replaceVars(arg));
+                    }
+                }
+            }
+        }
+
+        private boolean shouldFilterArg(String arg) {
+            if (DEMO_ARGS.contains(arg) && !options.demoMode) return false;
+            return !QUICKPLAY_ARGS.contains(arg) || options.quickPlayMode != null;
         }
 
         private void addLegacyArgs() {
@@ -552,14 +783,59 @@ public class Launcher {
             defaults.put("--accessToken", vars.get("auth_access_token"));
             defaults.put("--version", info.hasInheritance() ?
                     info.getBaseVersionId() : info.getVersionId());
-            defaults.put("--gameDir", info.getGameDir().toString());
+            defaults.put("--gameDir", vars.get("game_directory"));
 
             defaults.forEach((key, value) -> {
-                if (!command.contains(key)) {
+                if (!command.contains(key) && value != null && !value.isEmpty()) {
                     command.add(key);
                     command.add(value);
                 }
             });
+        }
+
+        private void addOptionalArgs() {
+            // Agregar demo si está habilitado
+            if (options.demoMode && !command.contains("--demo")) {
+                command.add("--demo");
+            }
+
+            // Agregar quickplay si está habilitado
+            if (options.quickPlayMode != null && options.quickPlayValue != null) {
+                String quickPlayArg = switch (options.quickPlayMode) {
+                    case "singleplayer" -> "--quickPlaySingleplayer";
+                    case "multiplayer" -> "--quickPlayMultiplayer";
+                    case "realms" -> "--quickPlayRealms";
+                    default -> null;
+                };
+
+                if (quickPlayArg != null && !command.contains(quickPlayArg)) {
+                    command.add(quickPlayArg);
+                    command.add(options.quickPlayValue);
+                }
+            }
+        }
+
+        private void cleanupUnresolvedVars() {
+            // Eliminar argumentos con variables sin resolver
+            List<Integer> toRemove = new ArrayList<>();
+            for (int i = 0; i < command.size(); i++) {
+                String arg = command.get(i);
+                if (arg.contains("${")) {
+                    toRemove.add(i);
+                    // Si es un flag (--algo), también remover el siguiente valor
+                    if (i > 0 && command.get(i-1).startsWith("--") && !command.get(i-1).contains("${")) {
+                        toRemove.add(i-1);
+                    }
+                }
+            }
+            // Remover en orden inverso para no afectar índices
+            toRemove.sort(Collections.reverseOrder());
+            for (int idx : toRemove) {
+                if (idx < command.size()) {
+                    System.out.println("Removing unresolved arg: " + command.get(idx));
+                    command.remove(idx);
+                }
+            }
         }
 
         private String replaceVars(String str) {
@@ -578,41 +854,50 @@ public class Launcher {
         }
     }
 
-    // ==================== MÉTODO PRINCIPAL ====================
+    // ==================== MÉTODOS PRINCIPALES ====================
 
+    /**
+     * Lanzamiento simple sin opciones adicionales (Quick Play y Demo deshabilitados)
+     */
     public static void launch(String versionJsonPath, String gameDir, Path instanceDir,
                               String username, String javaPath, String minRam, String maxRam,
                               int width, int height, boolean cracked)
             throws IOException, InterruptedException {
+        launch(versionJsonPath, gameDir, instanceDir, username, javaPath,
+                minRam, maxRam, width, height, cracked, LaunchOptions.defaults());
+    }
+
+    /**
+     * Lanzamiento con opciones personalizadas
+     */
+    public static void launch(String versionJsonPath, String gameDir, Path instanceDir,
+                              String username, String javaPath, String minRam, String maxRam,
+                              int width, int height, boolean cracked, LaunchOptions options)
+            throws IOException, InterruptedException {
 
         System.out.println("=== CubicLauncher - Universal Minecraft Launcher ===");
 
-        // Cargar versión
         VersionInfo info = new VersionInfo(versionJsonPath, gameDir);
         System.out.println("Version: " + info.getVersionId());
-        System.out.println("Natives: " + info.getNativesDir());
+        System.out.println("Demo mode: " + options.demoMode);
+        System.out.println("Quick Play: " + (options.quickPlayMode != null ?
+                options.quickPlayMode + " -> " + options.quickPlayValue : "disabled"));
 
-        // Preparar directorios
         prepareDirectories(info);
 
-        // Obtener clase principal
         String mainClass = info.getProperty("mainClass", null);
         if (mainClass == null) {
             throw new IllegalStateException("Main class not found");
         }
-        System.out.println("Main class: " + mainClass);
 
-        // Construir classpath
         String classpath = buildClasspath(info);
         if (classpath.isEmpty()) {
             throw new IllegalStateException("Classpath is empty");
         }
 
-        // Preparar variables
         Map<String, String> vars = buildVariables(info, username, instanceDir.toString());
 
-        // Construir comando
-        List<String> command = new CommandBuilder(info, vars)
+        List<String> command = new CommandBuilder(info, vars, options)
                 .addJava(javaPath)
                 .addJvmArgs(minRam, maxRam, cracked)
                 .addClasspath(classpath)
@@ -620,7 +905,6 @@ public class Launcher {
                 .addGameArgs(width, height)
                 .build();
 
-        // Ejecutar
         executeGame(command, info.getGameDir().toString(), javaPath);
     }
 
@@ -655,10 +939,12 @@ public class Launcher {
 
         DependencyResolver resolver = new DependencyResolver(info.getLibDir(), info.getNativesDir());
 
-        // Procesar parent primero, luego child
+        // Procesar parent primero (isChild = false)
         if (info.hasInheritance()) {
             resolver.processVersion(info.getBaseVersionData(), false);
         }
+
+        // Procesar child después (isChild = true) - tiene prioridad en conflictos
         resolver.processVersion(info.getVersionData(), true);
 
         String classpath = resolver.buildClasspath(info);
@@ -759,7 +1045,6 @@ public class Launcher {
         return javaPath;
     }
 
-    // Helpers para acceso seguro a JSON
     private static String safeGetString(JsonObject obj, String key) {
         return obj.has(key) ? obj.get(key).getAsString() : null;
     }
@@ -768,7 +1053,7 @@ public class Launcher {
         return obj.has(key) ? obj.getAsJsonObject(key) : null;
     }
 
-    private static JsonArray safeGetArray(JsonObject obj, String key) {
-        return obj.has(key) ? obj.getAsJsonArray(key) : null;
+    private static JsonArray safeGetArray(JsonObject obj) {
+        return obj.has("rules") ? obj.getAsJsonArray("rules") : null;
     }
 }
