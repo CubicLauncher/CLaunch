@@ -207,15 +207,31 @@ public class Launcher {
     /**
      * Resuelve dependencias con soporte de herencia y conflictos
      * Prioriza librerías del child sobre el parent
+     * Maneja correctamente natives cuando hay conflictos de versiones
      */
     private static class DependencyResolver {
         private final Set<String> addedPaths = new LinkedHashSet<>();
         private final Map<String, String> libraryKeys = new HashMap<>(); // group:artifact -> path
-        private final Map<String, String> nativeLibraries = new HashMap<>(); // Para natives separados
+        private final Map<String, NativeInfo> nativeLibraries = new HashMap<>(); // group:artifact -> native info
         private final Path libDir;
+        private final Path nativesDir;
+
+        // Almacena info de natives pendientes de extracción
+        private static class NativeInfo {
+            final String description;
+            final Path jarPath;
+            final String classifier;
+
+            NativeInfo(String description, Path jarPath, String classifier) {
+                this.description = description;
+                this.jarPath = jarPath;
+                this.classifier = classifier;
+            }
+        }
 
         public DependencyResolver(Path libDir, Path nativesDir) {
             this.libDir = libDir;
+            this.nativesDir = nativesDir;
         }
 
         public void processVersion(JsonObject versionData, boolean isChild) {
@@ -231,7 +247,7 @@ public class Launcher {
                 // Procesar artifact principal
                 addArtifact(libObj, lib, isChild);
 
-                // Procesar natives
+                // Procesar natives (con soporte de conflictos)
                 addNatives(libObj, lib, isChild);
             }
         }
@@ -261,7 +277,7 @@ public class Launcher {
             JsonObject downloads = safeGetObject(libObj, "downloads");
             JsonObject natives = safeGetObject(libObj, "natives");
 
-            if (downloads == null || natives == null) return;
+            if (natives == null) return;
 
             // Determinar el classifier de natives para el OS actual
             String osName = System.getProperty("os.name").toLowerCase();
@@ -281,19 +297,71 @@ public class Launcher {
             String arch = System.getProperty("os.arch").contains("64") ? "64" : "32";
             nativeKey = nativeKey.replace("${arch}", arch);
 
-            // Buscar en classifiers
-            if (downloads.has("classifiers")) {
+            Path nativeJarPath = null;
+
+            // Buscar en classifiers primero
+            if (downloads != null && downloads.has("classifiers")) {
                 JsonObject classifiers = downloads.getAsJsonObject("classifiers");
                 if (classifiers.has(nativeKey)) {
                     JsonObject nativeArtifact = classifiers.getAsJsonObject(nativeKey);
                     String path = safeGetString(nativeArtifact, "path");
                     if (path != null) {
-                        Path fullPath = libDir.resolve(path);
-                        // Los natives se agregan sin clave y sin reemplazar artifacts
-                        addNativePath(fullPath, lib.name + " (native: " + nativeKey + ")");
+                        nativeJarPath = libDir.resolve(path);
                     }
                 }
             }
+
+            // Si no hay classifiers, construir path manualmente
+            if (nativeJarPath == null) {
+                nativeJarPath = buildNativePath(lib.name, nativeKey);
+            }
+
+            if (nativeJarPath == null || !Files.exists(nativeJarPath)) {
+                System.err.println("Native library not found: " + lib.name +
+                        " (native: " + nativeKey + ") -> " + nativeJarPath);
+                return;
+            }
+
+            String libraryKey = lib.getKey();
+            NativeInfo newNative = new NativeInfo(
+                    lib.name + " (native: " + nativeKey + ")",
+                    nativeJarPath,
+                    nativeKey
+            );
+
+            // Manejar conflictos de natives igual que artifacts
+            NativeInfo existingNative = nativeLibraries.get(libraryKey);
+
+            if (existingNative != null) {
+                if (isChild) {
+                    // Child tiene prioridad: reemplazar native del parent
+                    System.out.println("Native conflict resolved - Child priority: " + libraryKey);
+                    System.out.println("  Replacing native: " + existingNative.jarPath);
+                    System.out.println("  With: " + nativeJarPath);
+                    nativeLibraries.put(libraryKey, newNative);
+                } else {
+                    System.out.println("Native conflict - Keeping existing: " + libraryKey);
+                }
+            } else {
+                nativeLibraries.put(libraryKey, newNative);
+                System.out.println("Native: " + newNative.description + " -> " + nativeJarPath);
+            }
+        }
+
+        private Path buildNativePath(String name, String classifier) {
+            if (name == null) return null;
+
+            String[] parts = name.split(":");
+            if (parts.length < 3) return null;
+
+            String groupPath = parts[0].replace(".", "/");
+            String artifact = parts[1];
+            String version = parts[2];
+
+            return libDir.resolve(groupPath)
+                    .resolve(artifact)
+                    .resolve(version)
+                    .resolve(artifact + "-" + version + "-" + classifier + ".jar");
         }
 
         private boolean isNativeLibrary(String path) {
@@ -310,14 +378,11 @@ public class Launcher {
 
             String pathStr = path.toString();
 
-            // Si tiene clave (group:artifact), verificar conflictos SOLO para no-natives
             if (libraryKey != null && !isNative) {
                 String existingPath = libraryKeys.get(libraryKey);
 
                 if (existingPath != null) {
-                    // Conflicto detectado: misma librería, diferentes versiones
                     if (isChild) {
-                        // El child tiene prioridad: reemplazar la del parent
                         System.out.println("Library conflict resolved - Child priority: " + libraryKey);
                         System.out.println("  Replacing: " + existingPath);
                         System.out.println("  With: " + pathStr);
@@ -325,46 +390,111 @@ public class Launcher {
                         addedPaths.remove(existingPath);
                         addedPaths.add(pathStr);
                         libraryKeys.put(libraryKey, pathStr);
-                    } else {
-                        // El parent se procesa primero, mantener la existente si el child no la reemplazó
-                        if (!addedPaths.contains(pathStr)) {
-                            System.out.println("Library conflict - Keeping parent version: " + libraryKey);
-                        }
                     }
                 } else {
-                    // Primera vez que vemos esta librería
                     libraryKeys.put(libraryKey, pathStr);
                     if (addedPaths.add(pathStr)) {
                         System.out.println("Library: " + description + " -> " + pathStr);
                     }
                 }
             } else {
-                // Librería sin clave o nativa, agregar por path
                 if (addedPaths.add(pathStr)) {
                     System.out.println("Library: " + description + " -> " + pathStr);
                 }
             }
         }
 
-        private void addNativePath(Path path, String description) {
-            if (path == null || !Files.exists(path)) {
-                if (path != null) {
-                    System.err.println("Native library not found: " + description + " -> " + path);
-                }
-                return;
+        /**
+         * Extrae todos los natives resueltos al directorio de natives
+         * Debe llamarse DESPUÉS de procesar todas las versiones
+         */
+        public void extractNatives() throws IOException {
+            System.out.println("\n=== Extracting Natives ===");
+            Files.createDirectories(nativesDir);
+
+            // Limpiar natives anteriores para evitar conflictos
+            // (opcional, descomentar si quieres limpiar siempre)
+            // cleanNativesDirectory();
+
+            for (Map.Entry<String, NativeInfo> entry : nativeLibraries.entrySet()) {
+                NativeInfo info = entry.getValue();
+                extractNativeJar(info.jarPath, info.description);
             }
 
-            String pathStr = path.toString();
-            // Los natives se agregan directamente sin verificar conflictos
-            if (addedPaths.add(pathStr)) {
-                System.out.println("Native: " + description + " -> " + pathStr);
+            System.out.println("Natives extracted to: " + nativesDir);
+        }
+
+        private void extractNativeJar(Path jarPath, String description) throws IOException {
+            System.out.println("Extracting: " + description);
+
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(jarPath.toFile())) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
+
+                while (entries.hasMoreElements()) {
+                    java.util.zip.ZipEntry entry = entries.nextElement();
+                    String name = entry.getName();
+
+                    // Solo extraer archivos nativos (.so, .dll, .dylib, .jnilib)
+                    if (isNativeFile(name) && !entry.isDirectory()) {
+                        // Extraer solo el nombre del archivo, sin subdirectorios
+                        String fileName = Paths.get(name).getFileName().toString();
+                        Path targetPath = nativesDir.resolve(fileName);
+
+                        // Sobrescribir si existe (importante para resolver conflictos)
+                        try (InputStream is = zip.getInputStream(entry)) {
+                            Files.copy(is, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                            System.out.println("  -> " + fileName);
+                        }
+                    }
+                }
             }
         }
 
-        public String buildClasspath(VersionInfo info) {
-            List<String> classpath = new ArrayList<>(addedPaths);
-            addVersionJars(classpath, info);
-            return String.join(File.pathSeparator, classpath);
+        private boolean isNativeFile(String name) {
+            String lower = name.toLowerCase();
+            return (lower.endsWith(".so") ||
+                    lower.endsWith(".dll") ||
+                    lower.endsWith(".dylib") ||
+                    lower.endsWith(".jnilib")) &&
+                    !lower.contains("meta-inf");
+        }
+
+        private void cleanNativesDirectory() throws IOException {
+            if (Files.exists(nativesDir)) {
+                try (var stream = Files.list(nativesDir)) {
+                    stream.filter(p -> isNativeFile(p.toString()))
+                            .forEach(p -> {
+                                try {
+                                    Files.delete(p);
+                                } catch (IOException e) {
+                                    System.err.println("Failed to delete: " + p);
+                                }
+                            });
+                }
+            }
+        }
+
+        private static String buildClasspath(VersionInfo info) throws IOException {
+            System.out.println("Building classpath...");
+
+            DependencyResolver resolver = new DependencyResolver(info.getLibDir(), info.getNativesDir());
+
+            // Procesar parent primero (isChild = false)
+            if (info.hasInheritance()) {
+                resolver.processVersion(info.getBaseVersionData(), false);
+            }
+
+            // Procesar child después (isChild = true) - tiene prioridad en conflictos
+            resolver.processVersion(info.getVersionData(), true);
+
+            // IMPORTANTE: Extraer natives DESPUÉS de resolver todos los conflictos
+            // Esto asegura que se usen los natives correctos (del child si hay conflicto)
+            resolver.extractNatives();
+
+            String classpath = resolver.buildClasspath(info);
+            System.out.println("Classpath built with " + resolver.getLibraryCount() + " libraries");
+
+            return classpath;
         }
 
         private void addVersionJars(List<String> classpath, VersionInfo info) {
@@ -957,7 +1087,7 @@ public class Launcher {
         return vars;
     }
 
-    private static String buildClasspath(VersionInfo info) {
+    private static String buildClasspath(VersionInfo info) throws IOException {
         System.out.println("Building classpath...");
 
         DependencyResolver resolver = new DependencyResolver(info.getLibDir(), info.getNativesDir());
