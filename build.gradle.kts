@@ -24,6 +24,6 @@ tasks.test {
 }
 
 tasks.jar {
-    archiveBaseName.set("CLaunch")
+    archiveBaseName.set("claunch-" + version)
     from(sourceSets.main.get().output)
 }

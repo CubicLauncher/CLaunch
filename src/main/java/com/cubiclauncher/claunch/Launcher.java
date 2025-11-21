@@ -211,6 +211,7 @@ public class Launcher {
     private static class DependencyResolver {
         private final Set<String> addedPaths = new LinkedHashSet<>();
         private final Map<String, String> libraryKeys = new HashMap<>(); // group:artifact -> path
+        private final Map<String, String> nativeLibraries = new HashMap<>(); // Para natives separados
         private final Path libDir;
 
         public DependencyResolver(Path libDir, Path nativesDir) {
@@ -242,13 +243,16 @@ public class Launcher {
                 String path = safeGetString(artifact, "path");
                 if (path != null) {
                     Path fullPath = libDir.resolve(path);
-                    addPath(fullPath, lib.name + " (artifact)", lib.getKey(), isChild);
+                    // Solo procesar como artifact si NO es un native
+                    if (isNativeLibrary(path)) {
+                        addPath(fullPath, lib.name + " (artifact)", lib.getKey(), isChild, false);
+                    }
                 }
             } else {
                 // Construir path desde name si no hay downloads
                 Path path = lib.resolvePath(libDir);
-                if (path != null) {
-                    addPath(path, lib.name, lib.getKey(), isChild);
+                if (path != null && isNativeLibrary(path.toString())) {
+                    addPath(path, lib.name, lib.getKey(), isChild, false);
                 }
             }
         }
@@ -285,14 +289,18 @@ public class Launcher {
                     String path = safeGetString(nativeArtifact, "path");
                     if (path != null) {
                         Path fullPath = libDir.resolve(path);
-                        // Los natives no tienen clave única, se manejan por path
-                        addPath(fullPath, lib.name + " (native: " + nativeKey + ")", null, isChild);
+                        // Los natives se agregan sin clave y sin reemplazar artifacts
+                        addNativePath(fullPath, lib.name + " (native: " + nativeKey + ")");
                     }
                 }
             }
         }
 
-        private void addPath(Path path, String description, String libraryKey, boolean isChild) {
+        private boolean isNativeLibrary(String path) {
+            return path == null || !path.contains("-natives-");
+        }
+
+        private void addPath(Path path, String description, String libraryKey, boolean isChild, boolean isNative) {
             if (path == null || !Files.exists(path)) {
                 if (path != null) {
                     System.err.println("Library not found: " + description + " -> " + path);
@@ -302,8 +310,8 @@ public class Launcher {
 
             String pathStr = path.toString();
 
-            // Si tiene clave (group:artifact), verificar conflictos
-            if (libraryKey != null) {
+            // Si tiene clave (group:artifact), verificar conflictos SOLO para no-natives
+            if (libraryKey != null && !isNative) {
                 String existingPath = libraryKeys.get(libraryKey);
 
                 if (existingPath != null) {
@@ -331,10 +339,25 @@ public class Launcher {
                     }
                 }
             } else {
-                // Librería sin clave (natives), agregar por path
+                // Librería sin clave o nativa, agregar por path
                 if (addedPaths.add(pathStr)) {
                     System.out.println("Library: " + description + " -> " + pathStr);
                 }
+            }
+        }
+
+        private void addNativePath(Path path, String description) {
+            if (path == null || !Files.exists(path)) {
+                if (path != null) {
+                    System.err.println("Native library not found: " + description + " -> " + path);
+                }
+                return;
+            }
+
+            String pathStr = path.toString();
+            // Los natives se agregan directamente sin verificar conflictos
+            if (addedPaths.add(pathStr)) {
+                System.out.println("Native: " + description + " -> " + pathStr);
             }
         }
 
