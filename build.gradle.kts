@@ -1,31 +1,37 @@
-@file:Suppress("SpellCheckingInspection")
-
 plugins {
     id("java")
+    id("maven-publish")
 }
 
 group = "com.cubiclauncher.claunch"
-version = "1.0-SNAPSHOT"
+version = "1.0.0"
 
 repositories {
     mavenCentral()
 }
 
-dependencies {
-    testImplementation(platform("org.junit:junit-bom:5.10.0"))
-    testImplementation("org.junit.jupiter:junit-jupiter")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+            groupId = "com.cubiclauncher.claunch"
+            artifactId = "claunch"
+            version = "1.0.0"
+        }
+    }
 
-    implementation("ch.qos.logback:logback-classic:1.5.21")
-    implementation("org.slf4j:slf4j-api:2.0.17")
-    implementation("com.google.code.gson:gson:2.13.2")
-}
+    repositories {
+        maven {
+            val githubActor = System.getenv("USERNAME")
+            val githubToken = System.getenv("TOKEN")
 
-tasks.test {
-    useJUnitPlatform()
-}
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/CubicLauncher/CLaunch")
 
-tasks.jar {
-    archiveBaseName.set("claunch-" + version)
-    from(sourceSets.main.get().output)
+            credentials {
+                username = githubActor
+                password = githubToken
+            }
+        }
+    }
 }
