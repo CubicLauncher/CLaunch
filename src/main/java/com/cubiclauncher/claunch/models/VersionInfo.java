@@ -4,7 +4,6 @@ import com.google.gson.JsonObject;
 import com.cubiclauncher.claunch.utils.JsonUtils;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -22,6 +21,7 @@ public class VersionInfo {
     private final Path assetsDir;
     private final Path nativesDir;
     private final Path versionDir;
+    private final String MinimumJREVersion;
 
     public VersionInfo(String versionJsonPath, String gameDir) throws IOException {
         this.gameDir = Paths.get(gameDir).toAbsolutePath();
@@ -33,7 +33,7 @@ public class VersionInfo {
 
         this.versionId = versionData.get("id").getAsString();
         this.versionDir = Paths.get(versionJsonPath).getParent();
-
+        this.MinimumJREVersion = versionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
         if (versionData.has("inheritsFrom")) {
             this.baseVersionId = versionData.get("inheritsFrom").getAsString();
             String baseJsonPath = this.gameDir.resolve("shared/versions")
@@ -81,7 +81,6 @@ public class VersionInfo {
     public String getAssetsIndexName() {
         return getProperty("assets", "legacy");
     }
-
     public Path getAssetsVirtualDir() {
         return assetsDir.resolve("virtual").resolve(getAssetsIndexName());
     }
@@ -89,12 +88,13 @@ public class VersionInfo {
     // Getters
     public String getVersionId() { return versionId; }
     public String getBaseVersionId() { return baseVersionId; }
-    public String getResolvedVersionId() { return resolvedVersionId; }
     public Path getGameDir() { return gameDir; }
     public Path getLibDir() { return libDir; }
+
+    public String getMinimumJREVersion() { return MinimumJREVersion; }
+
     public Path getAssetsDir() { return assetsDir; }
     public Path getNativesDir() { return nativesDir; }
-    public Path getVersionDir() { return versionDir; }
     public JsonObject getVersionData() { return versionData; }
     public JsonObject getBaseVersionData() { return baseVersionData; }
     public boolean hasInheritance() { return baseVersionId != null; }
