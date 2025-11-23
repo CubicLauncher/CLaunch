@@ -21,7 +21,7 @@ public class VersionInfo {
     private final Path assetsDir;
     private final Path nativesDir;
     private final Path versionDir;
-    private final String MinimumJREVersion;
+    private String MinimumJREVersion;
 
     public VersionInfo(String versionJsonPath, String gameDir) throws IOException {
         this.gameDir = Paths.get(gameDir).toAbsolutePath();
@@ -33,14 +33,13 @@ public class VersionInfo {
 
         this.versionId = versionData.get("id").getAsString();
         this.versionDir = Paths.get(versionJsonPath).getParent();
-        this.MinimumJREVersion = versionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
         if (versionData.has("inheritsFrom")) {
             this.baseVersionId = versionData.get("inheritsFrom").getAsString();
             String baseJsonPath = this.gameDir.resolve("shared/versions")
                     .resolve(baseVersionId)
                     .resolve(baseVersionId + ".json")
                     .toString();
-
+            this.MinimumJREVersion = versionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
             this.baseVersionData = JsonUtils.loadJson(baseJsonPath);
             if (this.baseVersionData == null) {
                 throw new IOException("Failed to load base version: " + baseJsonPath);
@@ -51,7 +50,7 @@ public class VersionInfo {
             this.baseVersionData = null;
             this.resolvedVersionId = versionId;
         }
-
+        this.MinimumJREVersion = versionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
         Path sharedDir = this.gameDir.resolve("shared");
         this.libDir = sharedDir.resolve("libraries").toAbsolutePath();
         this.assetsDir = sharedDir.resolve("assets").toAbsolutePath();
@@ -90,9 +89,7 @@ public class VersionInfo {
     public String getBaseVersionId() { return baseVersionId; }
     public Path getGameDir() { return gameDir; }
     public Path getLibDir() { return libDir; }
-
     public String getMinimumJREVersion() { return MinimumJREVersion; }
-
     public Path getAssetsDir() { return assetsDir; }
     public Path getNativesDir() { return nativesDir; }
     public JsonObject getVersionData() { return versionData; }
