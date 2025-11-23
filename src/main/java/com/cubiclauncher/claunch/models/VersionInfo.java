@@ -33,24 +33,53 @@ public class VersionInfo {
 
         this.versionId = versionData.get("id").getAsString();
         this.versionDir = Paths.get(versionJsonPath).getParent();
+
+        // ============================
+        //   CARGA DEL PADRE (HERENCIA)
+        // ============================
         if (versionData.has("inheritsFrom")) {
             this.baseVersionId = versionData.get("inheritsFrom").getAsString();
+
             String baseJsonPath = this.gameDir.resolve("shared/versions")
                     .resolve(baseVersionId)
                     .resolve(baseVersionId + ".json")
                     .toString();
+
             this.baseVersionData = JsonUtils.loadJson(baseJsonPath);
-            this.MinimumJREVersion = baseVersionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
+
             if (this.baseVersionData == null) {
                 throw new IOException("Failed to load base version: " + baseJsonPath);
             }
+
             this.resolvedVersionId = baseVersionId;
         } else {
             this.baseVersionId = null;
             this.baseVersionData = null;
             this.resolvedVersionId = versionId;
         }
-        this.MinimumJREVersion = versionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
+
+        // ==================================
+        //   RESOLVER javaVersion / Fallback
+        // ==================================
+        JsonObject javaVer = null;
+
+        // 1) Primero la versión hija
+        if (versionData.has("javaVersion")) {
+            javaVer = versionData.getAsJsonObject("javaVersion");
+        }
+
+        // 2) Si no tiene, usar la del padre
+        else if (baseVersionData != null && baseVersionData.has("javaVersion")) {
+            javaVer = baseVersionData.getAsJsonObject("javaVersion");
+        }
+
+        // 3) Si ninguna tiene → devolver "0"
+        if (javaVer != null && javaVer.has("majorVersion")) {
+            this.MinimumJREVersion = javaVer.get("majorVersion").getAsString();
+        } else {
+            this.MinimumJREVersion = "0";
+        }
+
         Path sharedDir = this.gameDir.resolve("shared");
         this.libDir = sharedDir.resolve("libraries").toAbsolutePath();
         this.assetsDir = sharedDir.resolve("assets").toAbsolutePath();
@@ -80,6 +109,7 @@ public class VersionInfo {
     public String getAssetsIndexName() {
         return getProperty("assets", "legacy");
     }
+
     public Path getAssetsVirtualDir() {
         return assetsDir.resolve("virtual").resolve(getAssetsIndexName());
     }
