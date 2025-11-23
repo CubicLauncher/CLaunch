@@ -1,6 +1,5 @@
 plugins {
     id("java")
-    id("maven-publish")
 }
 
 group = "com.cubiclauncher.claunch"
@@ -10,28 +9,12 @@ repositories {
     mavenCentral()
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("mavenJava") {
-            from(components["java"])
-            groupId = "com.cubiclauncher.claunch"
-            artifactId = "claunch"
-            version = "1.0.0"
-        }
-    }
+dependencies {
+    testImplementation(platform("org.junit:junit-bom:5.10.0"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
-    repositories {
-        maven {
-            val githubActor = System.getenv("USERNAME")
-            val githubToken = System.getenv("TOKEN")
-
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/CubicLauncher/CLaunch")
-
-            credentials {
-                username = githubActor
-                password = githubToken
-            }
-        }
-    }
+    implementation("ch.qos.logback:logback-classic:1.5.21")
+    implementation("org.slf4j:slf4j-api:2.0.17")
+    implementation("com.google.code.gson:gson:2.13.2")
 }
