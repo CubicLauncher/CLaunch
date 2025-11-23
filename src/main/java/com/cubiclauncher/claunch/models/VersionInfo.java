@@ -39,8 +39,8 @@ public class VersionInfo {
                     .resolve(baseVersionId)
                     .resolve(baseVersionId + ".json")
                     .toString();
-            this.MinimumJREVersion = versionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
             this.baseVersionData = JsonUtils.loadJson(baseJsonPath);
+            this.MinimumJREVersion = baseVersionData.get("javaVersion").getAsJsonObject().get("majorVersion").getAsString();
             if (this.baseVersionData == null) {
                 throw new IOException("Failed to load base version: " + baseJsonPath);
             }
