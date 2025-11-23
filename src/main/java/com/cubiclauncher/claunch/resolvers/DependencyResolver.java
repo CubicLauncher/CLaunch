@@ -17,15 +17,18 @@ import java.util.*;
 /**
  * Resuelve dependencias con soporte de herencia y conflictos
  * Prioriza librerías del child sobre el parent
+ * NO incluye natives en el classpath (solo se extraen)
  */
 public class DependencyResolver {
     private final Set<String> addedPaths = new LinkedHashSet<>();
-    private final Map<String, String> libraryKeys = new HashMap<>(); // group:artifact -> path
-    private final Map<String, String> nativeLibraries = new HashMap<>(); // Para natives separados
+    private final Map<String, String> libraryKeys = new HashMap<>();
     private final Path libDir;
-    private static final Logger log = LoggerFactory.getLogger(CommandBuilder.class);
+    private final Path nativesDir;
+    private static final Logger log = LoggerFactory.getLogger(DependencyResolver.class);
+
     public DependencyResolver(Path libDir, Path nativesDir) {
         this.libDir = libDir;
+        this.nativesDir = nativesDir;
     }
 
     public void processVersion(JsonObject versionData, boolean isChild) {
@@ -38,96 +41,77 @@ public class DependencyResolver {
 
             if (!lib.shouldInclude()) continue;
 
-            // Procesar artifact principal
+            // Procesar artifact principal (NO natives)
             addArtifact(libObj, lib, isChild);
-
-            // Procesar natives
-            addNatives(libObj, lib, isChild);
         }
     }
 
     private void addArtifact(JsonObject libObj, Library lib, boolean isChild) {
         JsonObject downloads = JsonUtils.safeGetObject(libObj, "downloads");
+
         if (downloads != null && downloads.has("artifact")) {
             JsonObject artifact = downloads.getAsJsonObject("artifact");
             String path = JsonUtils.safeGetString(artifact, "path");
+
             if (path != null) {
-                Path fullPath = libDir.resolve(path);
-                // Solo procesar como artifact si NO es un native
-                if (isNativeLibrary(path)) {
-                    addPath(fullPath, lib.getName() + " (artifact)", lib.getKey(), isChild, false);
+                // IMPORTANTE: NO agregar JARs de natives al classpath
+                if (isNativeJar(path)) {
+                    log.debug("Skipping native JAR from classpath: {}", path);
+                    return;
                 }
+
+                Path fullPath = libDir.resolve(path);
+                addPath(fullPath, lib.getName(), lib.getKey(), isChild);
             }
         } else {
             // Construir path desde name si no hay downloads
             Path path = lib.resolvePath(libDir);
-            if (path != null && isNativeLibrary(path.toString())) {
-                addPath(path, lib.getName(), lib.getKey(), isChild, false);
-            }
-        }
-    }
-
-    private void addNatives(JsonObject libObj, Library lib, boolean isChild) {
-        JsonObject downloads = JsonUtils.safeGetObject(libObj, "downloads");
-        JsonObject natives = JsonUtils.safeGetObject(libObj, "natives");
-
-        if (downloads == null || natives == null) return;
-
-        // Determinar el classifier de natives para el OS actual
-        String osName = System.getProperty("os.name").toLowerCase();
-        String nativeKey = null;
-
-        if (osName.contains("win")) {
-            nativeKey = JsonUtils.safeGetString(natives, "windows");
-        } else if (osName.contains("mac") || osName.contains("darwin")) {
-            nativeKey = JsonUtils.safeGetString(natives, "osx");
-        } else if (osName.contains("linux")) {
-            nativeKey = JsonUtils.safeGetString(natives, "linux");
-        }
-
-        if (nativeKey == null) return;
-
-        // Reemplazar ${arch} si existe
-        String arch = System.getProperty("os.arch").contains("64") ? "64" : "32";
-        nativeKey = nativeKey.replace("${arch}", arch);
-
-        // Buscar en classifiers
-        if (downloads.has("classifiers")) {
-            JsonObject classifiers = downloads.getAsJsonObject("classifiers");
-            if (classifiers.has(nativeKey)) {
-                JsonObject nativeArtifact = classifiers.getAsJsonObject(nativeKey);
-                String path = JsonUtils.safeGetString(nativeArtifact, "path");
-                if (path != null) {
-                    Path fullPath = libDir.resolve(path);
-                    // Los natives se agregan sin clave y sin reemplazar artifacts
-                    addNativePath(fullPath, lib.getName() + " (native: " + nativeKey + ")");
+            if (path != null) {
+                String pathStr = path.toString();
+                if (isNativeJar(pathStr)) {
+                    log.debug("Skipping native JAR from classpath: {}", pathStr);
+                    return;
                 }
+                addPath(path, lib.getName(), lib.getKey(), isChild);
             }
         }
     }
 
-    private boolean isNativeLibrary(String path) {
-        return path == null || !path.contains("-natives-");
+    /**
+     * Detecta si un JAR es de natives basándose en su path
+     */
+    private boolean isNativeJar(String path) {
+        if (path == null) return false;
+        String lower = path.toLowerCase();
+
+        // Patrones comunes de JARs de natives
+        return lower.contains("-natives-") ||
+                lower.contains("/natives/") ||
+                lower.endsWith("-natives.jar") ||
+                // Patrones específicos de LWJGL
+                (lower.contains("lwjgl") && (
+                        lower.contains("-linux") ||
+                                lower.contains("-windows") ||
+                                lower.contains("-macos") ||
+                                lower.contains("-freebsd")
+                ));
     }
 
-    private void addPath(Path path, String description, String libraryKey, boolean isChild, boolean isNative) {
+    private void addPath(Path path, String description, String libraryKey, boolean isChild) {
         if (path == null || !Files.exists(path)) {
             if (path != null) {
-                System.err.println("Library not found: " + description + " -> " + path);
+                log.warn("Library not found: {} -> {}", description, path);
             }
             return;
         }
 
         String pathStr = path.toString();
 
-        // Si tiene clave (group:artifact), verificar conflictos SOLO para no-natives
-        if (libraryKey != null && !isNative) {
+        if (libraryKey != null) {
             String existingPath = libraryKeys.get(libraryKey);
 
             if (existingPath != null) {
-                // Conflicto detectado: misma librería, diferentes versiones
                 if (isChild) {
-                    // El child tiene prioridad: reemplazar la del parent
                     log.info("Library conflict resolved - Child priority: {}", libraryKey);
                     log.info("  Replacing: {}", existingPath);
                     log.info("  With: {}", pathStr);
@@ -135,43 +119,17 @@ public class DependencyResolver {
                     addedPaths.remove(existingPath);
                     addedPaths.add(pathStr);
                     libraryKeys.put(libraryKey, pathStr);
-                } else {
-                    // El parent se procesa primero, mantener la existente si el child no la reemplazó
-                    if (!addedPaths.contains(pathStr)) {
-                        log.info("Library conflict - Keeping parent version: {}", libraryKey);
-                    }
                 }
+                // Si es parent y ya existe, no hacer nada
             } else {
-                // Primera vez que vemos esta librería
                 libraryKeys.put(libraryKey, pathStr);
-                if (addedPaths.add(pathStr)) {
-                    logAndAdd(pathStr, description, "library");
-                }
+                addedPaths.add(pathStr);
+                log.debug("Added library: {} -> {}", description, pathStr);
             }
         } else {
-            // Librería sin clave o nativa, agregar por path
             if (addedPaths.add(pathStr)) {
-                logAndAdd(pathStr, description, "library");
+                log.debug("Added library: {} -> {}", description, pathStr);
             }
-        }
-    }
-    private void logAndAdd(String pathStr, String description, String type) {
-        if (addedPaths.add(pathStr)) {
-            log.info("{}: {} -> {}", type, description, pathStr);
-        }
-    }
-    private void addNativePath(Path path, String description) {
-        if (path == null || !Files.exists(path)) {
-            if (path != null) {
-                System.err.println("Native library not found: " + description + " -> " + path);
-            }
-            return;
-        }
-
-        String pathStr = path.toString();
-        // Los natives se agregan directamente sin verificar conflictos
-        if (addedPaths.add(pathStr)) {
-            logAndAdd(pathStr, description,"native");
         }
     }
 
@@ -199,15 +157,18 @@ public class DependencyResolver {
                 break;
             default:
                 addIfExists(classpath, clientJar);
-                addIfExists(classpath, versionJar);
+                if (!clientJar.equals(versionJar)) {
+                    addIfExists(classpath, versionJar);
+                }
         }
     }
 
     private void addIfExists(List<String> classpath, Path jar) {
-        if (Files.exists(jar)) {
+        if (jar != null && Files.exists(jar)) {
             String jarPath = jar.toString();
             if (!classpath.contains(jarPath)) {
                 classpath.add(jarPath);
+                log.debug("Added JAR to classpath: {}", jarPath);
             }
         }
     }
@@ -268,5 +229,7 @@ public class DependencyResolver {
         return "vanilla";
     }
 
-    public int getLibraryCount() { return addedPaths.size(); }
+    public int getLibraryCount() {
+        return addedPaths.size();
+    }
 }

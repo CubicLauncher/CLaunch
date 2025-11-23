@@ -115,7 +115,6 @@ public class Launcher {
 
         return classpath;
     }
-
     private static void executeGame(List<String> command, String gameDir, String javaPath)
             throws IOException, InterruptedException {
         log.info("\n=== Final Command ===");
