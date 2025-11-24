@@ -23,12 +23,10 @@ public class DependencyResolver {
     private final Set<String> addedPaths = new LinkedHashSet<>();
     private final Map<String, String> libraryKeys = new HashMap<>();
     private final Path libDir;
-    private final Path nativesDir;
     private static final Logger log = LoggerFactory.getLogger(DependencyResolver.class);
 
     public DependencyResolver(Path libDir, Path nativesDir) {
         this.libDir = libDir;
-        this.nativesDir = nativesDir;
     }
 
     public void processVersion(JsonObject versionData, boolean isChild) {

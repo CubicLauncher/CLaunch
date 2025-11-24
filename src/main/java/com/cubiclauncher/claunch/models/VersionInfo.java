@@ -20,8 +20,7 @@ public class VersionInfo {
     private final Path libDir;
     private final Path assetsDir;
     private final Path nativesDir;
-    private final Path versionDir;
-    private String MinimumJREVersion;
+    private final String MinimumJREVersion;
 
     public VersionInfo(String versionJsonPath, String gameDir) throws IOException {
         this.gameDir = Paths.get(gameDir).toAbsolutePath();
@@ -32,7 +31,7 @@ public class VersionInfo {
         }
 
         this.versionId = versionData.get("id").getAsString();
-        this.versionDir = Paths.get(versionJsonPath).getParent();
+        Path versionDir = Paths.get(versionJsonPath).getParent();
 
         // ============================
         //   CARGA DEL PADRE (HERENCIA)
