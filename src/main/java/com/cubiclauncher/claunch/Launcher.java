@@ -70,7 +70,58 @@ public class Launcher {
 
         executeGame(command, info.getGameDir().toString(), javaPath);
     }
+    /**
+     * Lanzamiento que devuelve el Process para control avanzado
+     */
+    public static Process launchWithProcess(String versionJsonPath, String gameDir, Path instanceDir,
+                                            String username, String javaPath, String minRam, String maxRam,
+                                            int width, int height, boolean cracked, LaunchOptions options)
+            throws IOException {
 
+        log.info("=== CubicLauncher CLaunch ===");
+
+        VersionInfo info = new VersionInfo(versionJsonPath, gameDir);
+        log.info("Version: {}", info.getVersionId());
+
+        prepareDirectories(info);
+
+        String mainClass = info.getProperty("mainClass", null);
+        if (mainClass == null) {
+            throw new IllegalStateException("Main class not found");
+        }
+
+        String classpath = buildClasspath(info);
+        if (classpath.isEmpty()) {
+            throw new IllegalStateException("Classpath is empty");
+        }
+
+        Map<String, String> vars = buildVariables(info, username, instanceDir.toString());
+
+        List<String> command = new CommandBuilder(info, vars, options)
+                .addJava(javaPath)
+                .addJvmArgs(minRam, maxRam, cracked)
+                .addClasspath(classpath)
+                .addMainClass(mainClass)
+                .addGameArgs(width, height)
+                .build();
+
+        return startProcess(command, info.getGameDir().toString(), javaPath);
+    }
+
+    private static Process startProcess(List<String> command, String gameDir, String javaPath)
+            throws IOException {
+        log.info("\n=== Final Command ===");
+        log.info(String.join(" ", command));
+        log.info("\n=== Starting Game ===");
+
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(new File(gameDir));
+
+        Map<String, String> env = builder.environment();
+        env.put("JAVA_HOME", new File(javaPath).getParent());
+
+        return builder.start();
+    }
     // ==================== MÉTODOS AUXILIARES ====================
 
     private static void prepareDirectories(VersionInfo info) throws IOException {
