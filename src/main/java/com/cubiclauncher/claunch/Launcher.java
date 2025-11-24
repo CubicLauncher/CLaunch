@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
  */
 public class Launcher {
     private static final Logger log = LoggerFactory.getLogger(Launcher.class);
+
     /**
      * Lanzamiento simple sin opciones adicionales (Quick Play y Demo deshabilitados)
      */
@@ -27,7 +28,7 @@ public class Launcher {
                               int width, int height, boolean cracked)
             throws IOException, InterruptedException {
         launch(versionJsonPath, gameDir, instanceDir, username, javaPath,
-                minRam, maxRam, width, height, cracked, LaunchOptions.defaults());
+                minRam, maxRam, width, height, cracked, LaunchOptions.defaults(), Collections.emptyMap());
     }
 
     /**
@@ -36,6 +37,18 @@ public class Launcher {
     public static void launch(String versionJsonPath, String gameDir, Path instanceDir,
                               String username, String javaPath, String minRam, String maxRam,
                               int width, int height, boolean cracked, LaunchOptions options)
+            throws IOException, InterruptedException {
+        launch(versionJsonPath, gameDir, instanceDir, username, javaPath,
+                minRam, maxRam, width, height, cracked, options, Collections.emptyMap());
+    }
+
+    /**
+     * Lanzamiento con opciones personalizadas y variables de entorno personalizadas
+     */
+    public static void launch(String versionJsonPath, String gameDir, Path instanceDir,
+                              String username, String javaPath, String minRam, String maxRam,
+                              int width, int height, boolean cracked, LaunchOptions options,
+                              Map<String, String> customEnv)
             throws IOException, InterruptedException {
 
         log.info("=== CubicLauncher CLaunch ===");
@@ -46,6 +59,10 @@ public class Launcher {
         log.info("Quick Play: {}", options.quickPlayMode != null ?
                 options.quickPlayMode + " -> " + options.quickPlayValue : "disabled");
 
+        if (!customEnv.isEmpty()) {
+            log.info("Custom environment variables: {}", customEnv);
+        }
+
         prepareDirectories(info);
 
         String mainClass = info.getProperty("mainClass", null);
@@ -68,8 +85,9 @@ public class Launcher {
                 .addGameArgs(width, height)
                 .build();
 
-        executeGame(command, info.getGameDir().toString(), javaPath);
+        executeGame(command, info.getGameDir().toString(), javaPath, customEnv);
     }
+
     /**
      * Lanzamiento que devuelve el Process para control avanzado
      */
@@ -77,11 +95,27 @@ public class Launcher {
                                             String username, String javaPath, String minRam, String maxRam,
                                             int width, int height, boolean cracked, LaunchOptions options)
             throws IOException {
+        return launchWithProcess(versionJsonPath, gameDir, instanceDir, username, javaPath,
+                minRam, maxRam, width, height, cracked, options, Collections.emptyMap());
+    }
+
+    /**
+     * Lanzamiento que devuelve el Process con variables de entorno personalizadas
+     */
+    public static Process launchWithProcess(String versionJsonPath, String gameDir, Path instanceDir,
+                                            String username, String javaPath, String minRam, String maxRam,
+                                            int width, int height, boolean cracked, LaunchOptions options,
+                                            Map<String, String> customEnv)
+            throws IOException {
 
         log.info("=== CubicLauncher CLaunch ===");
 
         VersionInfo info = new VersionInfo(versionJsonPath, gameDir);
         log.info("Version: {}", info.getVersionId());
+
+        if (!customEnv.isEmpty()) {
+            log.info("Custom environment variables: {}", customEnv);
+        }
 
         prepareDirectories(info);
 
@@ -105,22 +139,21 @@ public class Launcher {
                 .addGameArgs(width, height)
                 .build();
 
-        return startProcess(command, info.getGameDir().toString(), javaPath);
+        return startProcess(command, info.getGameDir().toString(), javaPath, customEnv);
     }
 
-    private static Process startProcess(List<String> command, String gameDir, String javaPath)
+    /**
+     * Método conveniente para lanzar con DPRIME=1
+     */
+    public static Process launchWithDPrime(String versionJsonPath, String gameDir, Path instanceDir,
+                                           String username, String javaPath, String minRam, String maxRam,
+                                           int width, int height, boolean cracked, LaunchOptions options)
             throws IOException {
-        log.info("\n=== Final Command ===");
-        log.info(String.join(" ", command));
-        log.info("\n=== Starting Game ===");
+        Map<String, String> dprimeEnv = new HashMap<>();
+        dprimeEnv.put("DPRIME", "1");
 
-        ProcessBuilder builder = new ProcessBuilder(command);
-        builder.directory(new File(gameDir));
-
-        Map<String, String> env = builder.environment();
-        env.put("JAVA_HOME", new File(javaPath).getParent());
-
-        return builder.start();
+        return launchWithProcess(versionJsonPath, gameDir, instanceDir, username, javaPath,
+                minRam, maxRam, width, height, cracked, options, dprimeEnv);
     }
     // ==================== MÉTODOS AUXILIARES ====================
 
@@ -166,7 +199,31 @@ public class Launcher {
 
         return classpath;
     }
-    private static void executeGame(List<String> command, String gameDir, String javaPath)
+
+    private static Process startProcess(List<String> command, String gameDir, String javaPath,
+                                        Map<String, String> customEnv)
+            throws IOException {
+        log.info("\n=== Final Command ===");
+        log.info(String.join(" ", command));
+        log.info("\n=== Starting Game ===");
+
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(new File(gameDir));
+
+        Map<String, String> env = builder.environment();
+        env.put("JAVA_HOME", new File(javaPath).getParent());
+
+        // Agregar variables de entorno personalizadas
+        if (customEnv != null && !customEnv.isEmpty()) {
+            env.putAll(customEnv);
+            log.info("Setting custom environment variables: {}", customEnv);
+        }
+
+        return builder.start();
+    }
+
+    private static void executeGame(List<String> command, String gameDir, String javaPath,
+                                    Map<String, String> customEnv)
             throws IOException, InterruptedException {
         log.info("\n=== Final Command ===");
         log.info(String.join(" ", command));
@@ -178,6 +235,12 @@ public class Launcher {
 
         Map<String, String> env = builder.environment();
         env.put("JAVA_HOME", new File(javaPath).getParent());
+
+        // Agregar variables de entorno personalizadas
+        if (customEnv != null && !customEnv.isEmpty()) {
+            env.putAll(customEnv);
+            log.info("Setting custom environment variables: {}", customEnv);
+        }
 
         Process process = builder.start();
         int exitCode = process.waitFor();
