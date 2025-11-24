@@ -142,9 +142,6 @@ public class Launcher {
         return startProcess(command, info.getGameDir().toString(), javaPath, customEnv);
     }
 
-    /**
-     * Método conveniente para lanzar con DPRIME=1
-     */
     public static Process launchWithDPrime(String versionJsonPath, String gameDir, Path instanceDir,
                                            String username, String javaPath, String minRam, String maxRam,
                                            int width, int height, boolean cracked, LaunchOptions options)
